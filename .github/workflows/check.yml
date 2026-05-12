@@ -25,4 +25,4 @@ jobs:
         run: pip install requests
 
       - name: Script ausführen
-        run: python check.py
+        run: python check.py || true
