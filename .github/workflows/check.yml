@@ -26,4 +26,3 @@ jobs:
 
       - name: Script ausführen
         run: python check.py
-``
