@@ -1,0 +1,25 @@
+name: Booking Check
+
+on:
+  schedule:
+    - cron: "0 6 * * *"   # täglich um 06:00 UTC (~08:00 DE)
+  workflow_dispatch:      # manuell starten
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Repo klonen
+        uses: actions/checkout@v3
+
+      - name: Python installieren
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Abhängigkeiten installieren
+        run: pip install requests
+
+      - name: Script ausführen
+        run: python check.py
