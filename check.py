@@ -105,6 +105,7 @@ def dismiss_cookie_banner(driver):
         except Exception:
             pass
 
+    # Last resort: Overlays entfernen
     try:
         driver.execute_script("""
           const sels = [
@@ -137,6 +138,9 @@ def scroll_to_booking_section(driver):
 
 
 def click_search_button(driver) -> bool:
+    """
+    Klickt gezielt auf: <input id="btn-search" type="submit" value="Suchen">
+    """
     dismiss_cookie_banner(driver)
     scroll_to_booking_section(driver)
     time.sleep(0.5)
@@ -144,7 +148,7 @@ def click_search_button(driver) -> bool:
     try:
         btn = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "btn-search")))
         driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
-        time.sleep(0.5)
+        time.sleep(0.3)
 
         try:
             WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.ID, "btn-search")))
@@ -154,6 +158,7 @@ def click_search_button(driver) -> bool:
         if safe_click(driver, btn, timeout=5):
             return True
 
+        # Fallback: form.submit()
         try:
             form = btn.find_element(By.XPATH, "ancestor::form")
             form.submit()
@@ -161,19 +166,44 @@ def click_search_button(driver) -> bool:
         except Exception:
             return False
 
-    except TimeoutException:
-        return False
     except Exception:
         return False
 
 
 # -----------------------------
-# NEW wait logic (the change)
+# Spinner wait (NEW)
 # -----------------------------
-def wait_for_results_loaded(driver, before_text: str, timeout=20):
+def wait_for_spinner_to_finish(driver, timeout_visible=2, timeout_gone=10):
     """
-    Wartet auf eine echte Änderung des Seiteninhalts nach dem Klick
-    ODER auf die bekannte "keine Ergebnisse"-Meldung.
+    Wartet auf das Verschwinden der Ladeanimation:
+      - Spinner hat Klasse: .tf_spinner
+      - während Laden:  style="display: block;"
+      - nach Laden:     style="display: none;"
+    Wir warten zuerst kurz (optional), ob er sichtbar wird, und dann bis er unsichtbar ist. [1](https://www.tutorialspoint.com/article/python-script-to-monitor-website-changes)
+    Wichtig: implicit waits können invisibility-Waits ausbremsen, daher temporär auf 0. [4](https://pyquesthub.com/automated-url-monitoring-with-python-a-practical-case-study)[2](https://jessbudd.com/blog/automate-ticket-availability-scraping/)
+    """
+    spinner = (By.CSS_SELECTOR, ".tf_spinner")
+
+    # implicit wait temporär deaktivieren (falls irgendwann gesetzt)
+    driver.implicitly_wait(0)
+
+    wait_short = WebDriverWait(driver, timeout_visible)
+    wait_long = WebDriverWait(driver, timeout_gone)
+
+    # optional: kurz warten, ob er sichtbar wird
+    try:
+        wait_short.until(EC.visibility_of_element_located(spinner))
+    except Exception:
+        pass
+
+    # dann: warten bis unsichtbar (display:none) oder nicht vorhanden
+    wait_long.until(EC.invisibility_of_element_located(spinner))  # [1](https://www.tutorialspoint.com/article/python-script-to-monitor-website-changes)
+
+
+def wait_for_results_loaded(driver, before_text: str, timeout=10):
+    """
+    Sicherheitsnetz: Nach Spinner weg noch kurz warten, bis sich der Inhalt wirklich geändert hat
+    oder die "keine Ergebnisse"-Meldung auftaucht. [2](https://jessbudd.com/blog/automate-ticket-availability-scraping/)[3](https://www.geeksforgeeks.org/python/python-script-to-monitor-website-changes/)
     """
     def condition(d):
         try:
@@ -215,6 +245,7 @@ def main() -> int:
     driver = make_driver()
     status_line = "Status unbekannt"
     clicked_info = "click=?"
+    spinner_info = "spinner=?"
 
     try:
         driver.get(URL)
@@ -223,7 +254,7 @@ def main() -> int:
         dismiss_cookie_banner(driver)
         scroll_to_booking_section(driver)
 
-        # Vorher-Zustand merken (damit wir auf echte Änderung warten)
+        # Vorher-Text merken (für echte Änderung)
         try:
             before_text = driver.find_element(By.TAG_NAME, "body").text
         except Exception:
@@ -233,16 +264,19 @@ def main() -> int:
         clicked_info = "click=OK" if clicked else "click=FAIL"
 
         if clicked:
+            # 1) Warte bis Spinner weg ist (typisch ~2s, max 10s)
             try:
-                # typischerweise ~2s; max 20s
-                wait_for_results_loaded(driver, before_text=before_text, timeout=20)
+                wait_for_spinner_to_finish(driver, timeout_visible=2, timeout_gone=10)
+                spinner_info = "spinner=OK"
             except TimeoutException:
-                # Retry: manchmal wird der erste Klick verschluckt
-                click_search_button(driver)
-                try:
-                    wait_for_results_loaded(driver, before_text=before_text, timeout=20)
-                except TimeoutException:
-                    status_line = "⚠️ Suche ausgelöst, aber keine erkennbare Inhaltsänderung innerhalb Timeout."
+                spinner_info = "spinner=TIMEOUT"
+
+            # 2) Danach (kurz) auf echte Inhaltsänderung warten
+            try:
+                wait_for_results_loaded(driver, before_text=before_text, timeout=10)
+            except TimeoutException:
+                # wenn es keine erkennbare Änderung gibt, trotzdem weitermachen (Screenshot hilft)
+                pass
         else:
             status_line = "⚠️ Konnte 'btn-search' nicht klicken."
 
@@ -270,7 +304,7 @@ def main() -> int:
         elif "keine passenden ergebnisse" in body_text.lower():
             status_line = "❌ Noch nichts frei (Hinweistext gefunden)."
 
-        caption = f"{status_line} [{clicked_info}]\n{ts}\n{URL}"
+        caption = f"{status_line} [{clicked_info},{spinner_info}]\n{ts}\n{URL}"
         try:
             telegram_send_photo(caption=caption, photo_path=SCREENSHOT_FILE)
         except Exception as e:
