@@ -2,7 +2,10 @@ name: Booking Check (Selenium + Telegram)
 
 on:
   schedule:
-    - cron: "0 6 * * *"
+    - cron: '0 9 * * *'
+      timezone: 'Europe/Berlin'
+    - cron: '0 16 * * *'
+      timezone: 'Europe/Berlin'
   workflow_dispatch:
 
 jobs:
