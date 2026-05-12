@@ -38,12 +38,17 @@ def page_ready(driver, timeout=40):
 
 
 def safe_click(driver, element, timeout=5) -> bool:
-    """Versucht ein Element robust zu klicken (normal -> actions -> JS)."""
+    """
+    Robuster Klick: normal -> Actions -> JS click.
+    Hintergrund: Elemente können als "klickbar" gelten, aber Click wird blockiert/verschluckt;
+    JS-click ist ein gängiger Fallback. [1](https://turboutilkit.com/de/uberprufungderwebsiteverfugbarkeit/)[2](https://www.uptimia.com/de)
+    """
     try:
         WebDriverWait(driver, timeout).until(lambda d: element.is_displayed() and element.is_enabled())
     except Exception:
         pass
 
+    # 1) normaler click
     try:
         element.click()
         return True
@@ -52,14 +57,14 @@ def safe_click(driver, element, timeout=5) -> bool:
     except Exception:
         pass
 
-    # Actions click (manchmal zuverlässiger)
+    # 2) Actions click
     try:
         ActionChains(driver).move_to_element(element).click().perform()
         return True
     except Exception:
         pass
 
-    # JavaScript click als Fallback (wenn Selenium click 'klickbar' sagt, aber nichts auslöst) [4](https://www.uptimia.com/de)[5](https://turboutilkit.com/de/uberprufungderwebsiteverfugbarkeit/)
+    # 3) JS click
     try:
         driver.execute_script("arguments[0].click();", element)
         return True
@@ -68,7 +73,7 @@ def safe_click(driver, element, timeout=5) -> bool:
 
 
 def dismiss_cookie_banner(driver):
-    """Versucht Consent/Cookie Banner zu akzeptieren oder Overlays zu entfernen."""
+    """Versucht Consent/Cookie Banner zu akzeptieren oder Overlays zu entfernen (best effort)."""
     time.sleep(1)
 
     text_variants = [
@@ -76,8 +81,8 @@ def dismiss_cookie_banner(driver):
         "Zustimmen", "Einverstanden", "OK", "Ok", "Accept all", "Accept"
     ]
 
-    # Buttons / Links mit typischem Text
     for t in text_variants:
+        # Buttons
         try:
             btns = driver.find_elements(By.XPATH, f"//button[contains(., '{t}')]")
             for b in btns:
@@ -86,6 +91,7 @@ def dismiss_cookie_banner(driver):
                         return True
         except Exception:
             pass
+        # Links
         try:
             links = driver.find_elements(By.XPATH, f"//a[contains(., '{t}')]")
             for a in links:
@@ -111,7 +117,7 @@ def dismiss_cookie_banner(driver):
         except Exception:
             pass
 
-    # Letzter Ausweg: blockierende Overlays entfernen (best-effort)
+    # Last resort: Overlays entfernen
     try:
         driver.execute_script("""
           const sels = [
@@ -146,66 +152,70 @@ def scroll_to_booking_section(driver):
 
 def click_search_button(driver) -> bool:
     """
-    Klickt ROBUST auf den sichtbaren 'Suchen'-Button:
-    - findet Kandidaten
-    - scrollt in Viewport
-    - normal click -> actions click -> JS click -> form.submit()
+    Klickt gezielt auf: <input id="btn-search" type="submit" value="Suchen">
+    Falls nicht vorhanden: Fallback auf andere Kandidaten.
     """
     dismiss_cookie_banner(driver)
     scroll_to_booking_section(driver)
     time.sleep(0.5)
 
-    # Kandidaten: Buttons mit Text "Suchen" (auch wenn Text in <span> steckt) oder submit inputs
-    candidates = []
+    # 1) Primär: ID btn-search
     try:
-        candidates.extend(driver.find_elements(
-            By.XPATH,
-            "//button[.//span[contains(normalize-space(.),'Suchen')] or contains(normalize-space(.),'Suchen')]"
-        ))
-    except Exception:
-        pass
-
-    try:
-        candidates.extend(driver.find_elements(
-            By.XPATH,
-            "//input[@type='submit' and (contains(@value,'Suchen') or contains(@aria-label,'Suchen'))]"
-        ))
-    except Exception:
-        pass
-
-    # Filter: sichtbar + enabled
-    candidates = [c for c in candidates if c.is_displayed() and c.is_enabled()]
-
-    if not candidates:
-        return False
-
-    # Häufig ist der relevante Button weiter unten -> letzten sichtbaren nehmen
-    btn = candidates[-1]
-
-    # In die Mitte scrollen (verhindert Sticky Header / Overlays)
-    try:
+        btn = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.ID, "btn-search"))
+        )
+        # in die Mitte scrollen (gegen Sticky Header/Overlays)
         driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
         time.sleep(0.5)
+
+        # clickable wait + robust click
+        try:
+            WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.ID, "btn-search")))
+        except Exception:
+            pass
+
+        if safe_click(driver, btn, timeout=5):
+            return True
+
+        # Fallback: form.submit()
+        try:
+            form = btn.find_element(By.XPATH, "ancestor::form")
+            form.submit()
+            return True
+        except Exception:
+            return False
+
+    except TimeoutException:
+        pass
     except Exception:
         pass
 
-    # Versuche zu klicken
-    if safe_click(driver, btn, timeout=5):
-        return True
-
-    # Fallback: Form submit (wenn ein echtes <form> vorhanden ist) [5](https://turboutilkit.com/de/uberprufungderwebsiteverfugbarkeit/)[6](https://dchatry.github.io/blog/2018/11/29/periodically-check-web-page-get-notified-changes.html)
+    # 2) Fallback: Input submit mit value=Suchen
     try:
-        form = btn.find_element(By.XPATH, "ancestor::form")
-        form.submit()
-        return True
+        candidates = driver.find_elements(By.XPATH, "//input[@type='submit' and contains(@value,'Suchen')]")
+        candidates = [c for c in candidates if c.is_displayed() and c.is_enabled()]
+        if candidates:
+            btn = candidates[-1]
+            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
+            time.sleep(0.5)
+            if safe_click(driver, btn, timeout=5):
+                return True
+            try:
+                form = btn.find_element(By.XPATH, "ancestor::form")
+                form.submit()
+                return True
+            except Exception:
+                return False
     except Exception:
-        return False
+        pass
+
+    return False
 
 
 def wait_for_results_loaded(driver, timeout=40):
     """
-    Wartet, bis nach dem Klick der Ergebniszustand geladen ist.
-    Explizites Warten reduziert Race-Conditions bei dynamischen Seiten. [1](https://learn.microsoft.com/en-us/microsoft-365/bookings/power-automate-integration?view=o365-worldwide)
+    Wartet nach dem Klick, bis der Ergebniszustand geladen ist.
+    Explizite Waits reduzieren Flakiness bei dynamischen Seiten. [3](https://learn.microsoft.com/en-us/microsoft-365/bookings/power-automate-integration?view=o365-worldwide)
     """
     def condition(d):
         try:
@@ -213,11 +223,11 @@ def wait_for_results_loaded(driver, timeout=40):
         except Exception:
             return False
 
-        # Wenn die "keine Ergebnisse"-Meldung erscheint => Suche hat reagiert
+        # "keine Ergebnisse" Meldung => Suche wurde ausgeführt
         if KEYWORD_NOT_AVAILABLE in txt:
             return True
 
-        # Alternativ: irgendein Hinweis auf den Buchungs-/Ergebnisfluss (Heuristik)
+        # Heuristik: Begriffe aus dem Buchungsfluss
         lowered = txt.lower()
         if ("verfügbarkeiten" in lowered) or ("warenkorb" in lowered) or ("buchung" in lowered):
             return True
@@ -232,7 +242,7 @@ def wait_for_results_loaded(driver, timeout=40):
 # -----------------------------
 def telegram_send_photo(caption: str, photo_path: str):
     """
-    Telegram Bot API: sendPhoto (chat_id + photo + caption). [2](https://www.naturgarten-kaiserstuhl.de/de/unterkunft-suchen)
+    Telegram Bot API: sendPhoto (chat_id + photo + caption). [4](https://www.naturgarten-kaiserstuhl.de/de/unterkunft-suchen)[5](https://www.campingplatz.de/campingplaetze/deutschland/schwarzfelder-hof/)
     """
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
@@ -255,31 +265,32 @@ def telegram_send_photo(caption: str, photo_path: str):
 def main() -> int:
     driver = make_driver()
     status_line = "Status unbekannt"
+    clicked_info = "click=?"
 
     try:
         driver.get(URL)
         page_ready(driver, timeout=40)
 
-        # Banner weg + scroll
         dismiss_cookie_banner(driver)
         scroll_to_booking_section(driver)
 
         # Suche auslösen (mit Retry)
         clicked = click_search_button(driver)
+        clicked_info = "click=OK" if clicked else "click=FAIL"
 
-        if not clicked:
-            status_line = "⚠️ Konnte 'Suchen' nicht eindeutig klicken (Screenshot zur Diagnose)."
-        else:
-            # Nach Klick warten, bis Ergebniszustand da ist
+        if clicked:
             try:
                 wait_for_results_loaded(driver, timeout=20)
             except TimeoutException:
-                # einmal retry (manchmal verschluckt JS den ersten Click)
-                click_search_button(driver)
+                # Retry (manchmal verschluckt JS den ersten Click)
+                clicked2 = click_search_button(driver)
+                clicked_info = "click=OK(retry)" if clicked2 else clicked_info
                 try:
                     wait_for_results_loaded(driver, timeout=40)
                 except TimeoutException:
                     status_line = "⚠️ 'Suchen' geklickt, aber Ergebniszustand nicht innerhalb Timeout sichtbar."
+        else:
+            status_line = "⚠️ Konnte 'btn-search' nicht klicken (Screenshot zur Diagnose)."
 
         # ✅ Screenshot IMMER (auch bei Fehlern)
         try:
@@ -296,7 +307,6 @@ def main() -> int:
 
         ts = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-        # Verfügbarkeit: Wenn der "keine Ergebnisse"-Text NICHT vorkommt, ist es ein möglicher Treffer
         if body_text and (KEYWORD_NOT_AVAILABLE not in body_text):
             status_line = "✅ MÖGLICHER TREFFER: 'keine Ergebnisse' Text NICHT gefunden (evtl. frei)."
             try:
@@ -304,11 +314,11 @@ def main() -> int:
                     f.write(f"Availability suspected at {ts}\n{URL}\n")
             except Exception:
                 pass
-        elif "keine Ergebnisse" in body_text.lower():
+        elif "keine passenden ergebnisse" in body_text.lower():
             status_line = "❌ Noch nichts frei (Hinweistext gefunden)."
 
         # Telegram: immer Screenshot + Status senden
-        caption = f"{status_line}\n{ts}\n{URL}"
+        caption = f"{status_line} [{clicked_info}]\n{ts}\n{URL}"
         try:
             telegram_send_photo(caption=caption, photo_path=SCREENSHOT_FILE)
         except Exception as e:
@@ -322,3 +332,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+``
