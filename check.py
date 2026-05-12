@@ -38,17 +38,11 @@ def page_ready(driver, timeout=40):
 
 
 def safe_click(driver, element, timeout=5) -> bool:
-    """
-    Robuster Klick: normal -> Actions -> JS click.
-    Hintergrund: Elemente können als "klickbar" gelten, aber Click wird blockiert/verschluckt;
-    JS-click ist ein gängiger Fallback. [1](https://turboutilkit.com/de/uberprufungderwebsiteverfugbarkeit/)[2](https://www.uptimia.com/de)
-    """
     try:
         WebDriverWait(driver, timeout).until(lambda d: element.is_displayed() and element.is_enabled())
     except Exception:
         pass
 
-    # 1) normaler click
     try:
         element.click()
         return True
@@ -57,14 +51,13 @@ def safe_click(driver, element, timeout=5) -> bool:
     except Exception:
         pass
 
-    # 2) Actions click
     try:
         ActionChains(driver).move_to_element(element).click().perform()
         return True
     except Exception:
         pass
 
-    # 3) JS click
+    # JS click als Fallback (wenn click "klickbar" wirkt, aber nichts triggert) [6](https://qaautomation.expert/2023/03/01/how-to-run-selenium-tests-with-github-actions/)
     try:
         driver.execute_script("arguments[0].click();", element)
         return True
@@ -73,16 +66,13 @@ def safe_click(driver, element, timeout=5) -> bool:
 
 
 def dismiss_cookie_banner(driver):
-    """Versucht Consent/Cookie Banner zu akzeptieren oder Overlays zu entfernen (best effort)."""
     time.sleep(1)
-
     text_variants = [
         "Alle akzeptieren", "Alles akzeptieren", "Akzeptieren",
         "Zustimmen", "Einverstanden", "OK", "Ok", "Accept all", "Accept"
     ]
 
     for t in text_variants:
-        # Buttons
         try:
             btns = driver.find_elements(By.XPATH, f"//button[contains(., '{t}')]")
             for b in btns:
@@ -91,7 +81,7 @@ def dismiss_cookie_banner(driver):
                         return True
         except Exception:
             pass
-        # Links
+
         try:
             links = driver.find_elements(By.XPATH, f"//a[contains(., '{t}')]")
             for a in links:
@@ -101,7 +91,6 @@ def dismiss_cookie_banner(driver):
         except Exception:
             pass
 
-    # Häufige CMP IDs (optional)
     id_variants = [
         "CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll",
         "CybotCookiebotDialogBodyButtonAccept",
@@ -134,7 +123,7 @@ def dismiss_cookie_banner(driver):
 
 
 def scroll_to_booking_section(driver):
-    """Scrollt zu #jumpBuchung (falls Element/Hash vorhanden)."""
+    # scrollIntoView ist robust, um Elemente in den Viewport zu holen [2](https://bing.com/search?q=Selenium+Python+element.screenshot+scroll+into+view+example)[3](https://stackoverflow.com/questions/41744368/scrolling-to-element-using-webdriver)
     try:
         el = driver.find_element(By.ID, "jumpBuchung")
         driver.execute_script("arguments[0].scrollIntoView({block:'start'});", el)
@@ -151,24 +140,16 @@ def scroll_to_booking_section(driver):
 
 
 def click_search_button(driver) -> bool:
-    """
-    Klickt gezielt auf: <input id="btn-search" type="submit" value="Suchen">
-    Falls nicht vorhanden: Fallback auf andere Kandidaten.
-    """
     dismiss_cookie_banner(driver)
     scroll_to_booking_section(driver)
     time.sleep(0.5)
 
-    # 1) Primär: ID btn-search
+    # Primär: exakt der Button, den du genannt hast
     try:
-        btn = WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.ID, "btn-search"))
-        )
-        # in die Mitte scrollen (gegen Sticky Header/Overlays)
+        btn = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "btn-search")))
         driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
         time.sleep(0.5)
 
-        # clickable wait + robust click
         try:
             WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.ID, "btn-search")))
         except Exception:
@@ -186,36 +167,15 @@ def click_search_button(driver) -> bool:
             return False
 
     except TimeoutException:
-        pass
-    except Exception:
-        pass
-
-    # 2) Fallback: Input submit mit value=Suchen
-    try:
-        candidates = driver.find_elements(By.XPATH, "//input[@type='submit' and contains(@value,'Suchen')]")
-        candidates = [c for c in candidates if c.is_displayed() and c.is_enabled()]
-        if candidates:
-            btn = candidates[-1]
-            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
-            time.sleep(0.5)
-            if safe_click(driver, btn, timeout=5):
-                return True
-            try:
-                form = btn.find_element(By.XPATH, "ancestor::form")
-                form.submit()
-                return True
-            except Exception:
-                return False
-    except Exception:
-        pass
-
-    return False
+        return False
 
 
-def wait_for_results_loaded(driver, timeout=40):
+def wait_for_results_loaded(driver, timeout=45):
     """
-    Wartet nach dem Klick, bis der Ergebniszustand geladen ist.
-    Explizite Waits reduzieren Flakiness bei dynamischen Seiten. [3](https://learn.microsoft.com/en-us/microsoft-365/bookings/power-automate-integration?view=o365-worldwide)
+    Explizite Waits sind stabiler als sleep bei dynamischen Seiten. [1](https://www.selenium.dev/documentation/webdriver/waits/)
+    Wir warten darauf, dass entweder:
+      - die "keine Ergebnisse"-Meldung irgendwo im Body steht, ODER
+      - die Seite in den Buchungsfluss übergeht (Heuristik)
     """
     def condition(d):
         try:
@@ -223,12 +183,11 @@ def wait_for_results_loaded(driver, timeout=40):
         except Exception:
             return False
 
-        # "keine Ergebnisse" Meldung => Suche wurde ausgeführt
         if KEYWORD_NOT_AVAILABLE in txt:
             return True
 
-        # Heuristik: Begriffe aus dem Buchungsfluss
         lowered = txt.lower()
+        # Heuristik, dass sich etwas getan hat (nicht perfekt, aber hilfreich)
         if ("verfügbarkeiten" in lowered) or ("warenkorb" in lowered) or ("buchung" in lowered):
             return True
 
@@ -237,13 +196,53 @@ def wait_for_results_loaded(driver, timeout=40):
     WebDriverWait(driver, timeout).until(condition)
 
 
+def find_results_element(driver):
+    """
+    Sucht ein Ergebnis-Element, das wir screenshotten können:
+    1) Element, das die Fehlmeldung enthält
+    2) Alternativ: ein Container mit 'Verfügbarkeiten' o.ä.
+    """
+    # 1) Fehlmeldung-Text
+    try:
+        el = driver.find_element(By.XPATH, "//*[contains(., 'keine passenden Ergebnisse') or contains(., 'keine passenden ergebnisse')]")
+        return el
+    except Exception:
+        pass
+
+    # 2) Überschrift/Label "Verfügbarkeiten"
+    try:
+        el = driver.find_element(By.XPATH, "//*[contains(., 'Verfügbarkeiten') or contains(., 'verfügbarkeiten')]")
+        return el
+    except Exception:
+        pass
+
+    return None
+
+
+def capture_best_screenshot(driver):
+    """
+    Macht bevorzugt einen Element-Screenshot vom Ergebnisbereich.
+    Selenium unterstützt Element-Screenshots direkt per element.screenshot(). [4](https://bing.com/search?q=Selenium+take+screenshot+of+specific+element+contains+text)[5](https://www.browserstack.com/guide/take-screenshot-with-selenium-python)
+    """
+    el = find_results_element(driver)
+    if el is not None:
+        try:
+            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)  # [2](https://bing.com/search?q=Selenium+Python+element.screenshot+scroll+into+view+example)[3](https://stackoverflow.com/questions/41744368/scrolling-to-element-using-webdriver)
+            time.sleep(0.5)
+            el.screenshot(SCREENSHOT_FILE)  # Element-Screenshot [4](https://bing.com/search?q=Selenium+take+screenshot+of+specific+element+contains+text)[5](https://www.browserstack.com/guide/take-screenshot-with-selenium-python)
+            return "element"
+        except Exception:
+            pass
+
+    # Fallback: normaler Screenshot vom aktuellen Viewport
+    driver.save_screenshot(SCREENSHOT_FILE)
+    return "full"
+
+
 # -----------------------------
 # Telegram helpers
 # -----------------------------
 def telegram_send_photo(caption: str, photo_path: str):
-    """
-    Telegram Bot API: sendPhoto (chat_id + photo + caption). [4](https://www.naturgarten-kaiserstuhl.de/de/unterkunft-suchen)[5](https://www.campingplatz.de/campingplaetze/deutschland/schwarzfelder-hof/)
-    """
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
 
@@ -251,6 +250,7 @@ def telegram_send_photo(caption: str, photo_path: str):
         print("ℹ️ Telegram env fehlt (TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID). Überspringe Telegram.")
         return
 
+    # sendPhoto: chat_id + photo + caption [7](https://stackoverflow.com/questions/71336204/github-action-check-if-a-file-already-exists)[8](https://docs.github.com/en/actions/concepts/workflows-and-actions/workflow-artifacts)
     endpoint = f"https://api.telegram.org/bot{token}/sendPhoto"
     with open(photo_path, "rb") as f:
         files = {"photo": f}
@@ -266,6 +266,7 @@ def main() -> int:
     driver = make_driver()
     status_line = "Status unbekannt"
     clicked_info = "click=?"
+    shot_kind = "shot=?"
 
     try:
         driver.get(URL)
@@ -274,30 +275,28 @@ def main() -> int:
         dismiss_cookie_banner(driver)
         scroll_to_booking_section(driver)
 
-        # Suche auslösen (mit Retry)
         clicked = click_search_button(driver)
         clicked_info = "click=OK" if clicked else "click=FAIL"
 
         if clicked:
             try:
-                wait_for_results_loaded(driver, timeout=20)
+                wait_for_results_loaded(driver, timeout=45)
             except TimeoutException:
-                # Retry (manchmal verschluckt JS den ersten Click)
-                clicked2 = click_search_button(driver)
-                clicked_info = "click=OK(retry)" if clicked2 else clicked_info
+                # Retry
+                click_search_button(driver)
                 try:
-                    wait_for_results_loaded(driver, timeout=40)
+                    wait_for_results_loaded(driver, timeout=45)
                 except TimeoutException:
-                    status_line = "⚠️ 'Suchen' geklickt, aber Ergebniszustand nicht innerhalb Timeout sichtbar."
+                    status_line = "⚠️ Suche ausgelöst, aber Ergebniszustand nicht rechtzeitig sichtbar."
         else:
-            status_line = "⚠️ Konnte 'btn-search' nicht klicken (Screenshot zur Diagnose)."
+            status_line = "⚠️ Konnte 'btn-search' nicht klicken."
 
-        # ✅ Screenshot IMMER (auch bei Fehlern)
+        # ✅ Screenshot immer, aber bevorzugt Ergebnis-Element
         try:
+            shot_kind = f"shot={capture_best_screenshot(driver)}"
+        except Exception:
             driver.save_screenshot(SCREENSHOT_FILE)
-            print(f"📸 Screenshot gespeichert: {SCREENSHOT_FILE}")
-        except Exception as e:
-            print(f"⚠️ Screenshot konnte nicht gespeichert werden: {e}")
+            shot_kind = "shot=full(fallback)"
 
         # Text prüfen
         try:
@@ -317,8 +316,7 @@ def main() -> int:
         elif "keine passenden ergebnisse" in body_text.lower():
             status_line = "❌ Noch nichts frei (Hinweistext gefunden)."
 
-        # Telegram: immer Screenshot + Status senden
-        caption = f"{status_line} [{clicked_info}]\n{ts}\n{URL}"
+        caption = f"{status_line} [{clicked_info},{shot_kind}]\n{ts}\n{URL}"
         try:
             telegram_send_photo(caption=caption, photo_path=SCREENSHOT_FILE)
         except Exception as e:
