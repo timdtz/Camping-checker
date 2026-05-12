@@ -29,6 +29,12 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run check
+      - name: Debug - list files
+        run: |
+          ls -la
+          echo "---- PNGs ----"
+          ls -la *.png || true
+          
         run: python check.py
 
       # Optional: Wenn AVAILABLE.txt existiert, lade Screenshot/Marker als Artifact hoch
