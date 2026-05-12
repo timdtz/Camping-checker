@@ -170,12 +170,10 @@ def click_search_button(driver) -> bool:
         return False
 
 
-def wait_for_results_loaded(driver, timeout=45):
+def wait_for_results_loaded(driver, before_text: str, timeout=20):
     """
-    Explizite Waits sind stabiler als sleep bei dynamischen Seiten. [1](https://www.selenium.dev/documentation/webdriver/waits/)
-    Wir warten darauf, dass entweder:
-      - die "keine Ergebnisse"-Meldung irgendwo im Body steht, ODER
-      - die Seite in den Buchungsfluss übergeht (Heuristik)
+    Wartet, bis sich der Seiteninhalt wirklich geändert hat
+    ODER die bekannte 'keine Ergebnisse'-Meldung erscheint.
     """
     def condition(d):
         try:
@@ -186,15 +184,11 @@ def wait_for_results_loaded(driver, timeout=45):
         if KEYWORD_NOT_AVAILABLE in txt:
             return True
 
-        lowered = txt.lower()
-        # Heuristik, dass sich etwas getan hat (nicht perfekt, aber hilfreich)
-        if ("verfügbarkeiten" in lowered) or ("warenkorb" in lowered) or ("buchung" in lowered):
-            return True
-
-        return False
+        # echte Änderung nach Klick
+        return txt != before_text
 
     WebDriverWait(driver, timeout).until(condition)
-
+    
 
 def find_results_element(driver):
     """
@@ -275,21 +269,22 @@ def main() -> int:
         dismiss_cookie_banner(driver)
         scroll_to_booking_section(driver)
 
-        clicked = click_search_button(driver)
-        clicked_info = "click=OK" if clicked else "click=FAIL"
+# Vorher-Zustand merken (damit wir auf echte Änderung warten)
+before_text = driver.find_element(By.TAG_NAME, "body").text
 
-        if clicked:
-            try:
-                wait_for_results_loaded(driver, timeout=45)
-            except TimeoutException:
-                # Retry
-                click_search_button(driver)
-                try:
-                    wait_for_results_loaded(driver, timeout=45)
-                except TimeoutException:
-                    status_line = "⚠️ Suche ausgelöst, aber Ergebniszustand nicht rechtzeitig sichtbar."
-        else:
-            status_line = "⚠️ Konnte 'btn-search' nicht klicken."
+clicked = click_search_button(driver)
+clicked_info = "click=OK" if clicked else "click=FAIL"
+
+if clicked:
+    try:
+        # Warte typischerweise nur ~2-5 Sekunden, max 20
+        wait_for_results_loaded(driver, before_text=before_text, timeout=20)
+    except TimeoutException:
+        # Retry: manchmal verschluckt JS den ersten Klick
+        click_search_button(driver)
+        wait_for_results_loaded(driver, before_text=before_text, timeout=20)
+else:
+    status_line = "⚠️ Konnte 'btn-search' nicht klicken."
 
         # ✅ Screenshot immer, aber bevorzugt Ergebnis-Element
         try:
