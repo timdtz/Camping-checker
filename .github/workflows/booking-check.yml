@@ -40,4 +40,5 @@ jobs:
           name: booking-availability-evidence
           path: |
             AVAILABLE.txt
-            screenshot-available-*.png
+            screenshot-*.png
+          if-no-files-found: warn
