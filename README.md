@@ -33,3 +33,7 @@ on:
     - cron: '0 16 * * *'
       timezone: 'Europe/Berlin'
   workflow_dispatch:
+```
+
+---
+*Erstellt mit M365 Copilot, GPT‑5 (Reasoning/“Thinking”)*
