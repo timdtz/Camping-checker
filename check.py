@@ -304,7 +304,8 @@ def main() -> int:
         elif "keine passenden ergebnisse" in body_text.lower():
             status_line = "❌ Noch nichts frei (Hinweistext gefunden)."
 
-        caption = f"{status_line} [{clicked_info},{spinner_info}]\n{ts}\n{URL}"
+       # caption = f"{status_line} [{clicked_info},{spinner_info}]\n{ts}\n{URL}"
+        caption = f"{status_line} \n{ts}\n{URL}"
         try:
             telegram_send_photo(caption=caption, photo_path=SCREENSHOT_FILE)
         except Exception as e:
