@@ -1,3 +1,4 @@
+
 # Camping-Checker (Schwarzfelder Hof) – Selenium + Telegram + GitHub Actions
 
 Dieses Repo prüft die Verfügbarkeit auf der Onlinebuchungsseite (JavaScript-Rendering via Selenium) und sendet bei jedem Lauf einen Screenshot per Telegram.
@@ -34,6 +35,8 @@ on:
       timezone: 'Europe/Berlin'
   workflow_dispatch:
 ```
+
+<img width="563" height="1218" alt="screenshot-bot-message" src="https://github.com/user-attachments/assets/00811c23-ddfb-4c3b-a762-ad45ba8ecaeb" />
 
 ---
 *Erstellt mit M365 Copilot, GPT‑5 (Reasoning/“Thinking”)*
